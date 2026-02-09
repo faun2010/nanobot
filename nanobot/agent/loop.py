@@ -4,6 +4,7 @@ import asyncio
 from contextlib import AsyncExitStack
 import json
 import json_repair
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,11 @@ from nanobot.agent.context import ContextBuilder
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
-from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
+from nanobot.agent.tools.web import OnlineSearchTool, WebSearchTool, WebFetchTool
 from nanobot.agent.tools.message import MessageTool
 from nanobot.agent.tools.spawn import SpawnTool
 from nanobot.agent.tools.cron import CronTool
+from nanobot.agent.tools.now_time import NowTimeTool
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import Session, SessionManager
@@ -69,7 +71,19 @@ class AgentLoop:
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
 
-        self.context = ContextBuilder(workspace)
+        resolved_model = self.model
+        resolve_model = getattr(self.provider, "_resolve_model", None)
+        if callable(resolve_model):
+            try:
+                resolved_model = resolve_model(self.model)
+            except Exception:
+                resolved_model = self.model
+
+        self.context = ContextBuilder(
+            workspace=workspace,
+            model=self.model,
+            resolved_model=resolved_model,
+        )
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
@@ -108,7 +122,11 @@ class AgentLoop:
         
         # Web tools
         self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        self.tools.register(OnlineSearchTool())
         self.tools.register(WebFetchTool())
+
+        # Time tool
+        self.tools.register(NowTimeTool())
         
         # Message tool
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
@@ -420,16 +438,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                 ],
                 model=self.model,
             )
-            text = (response.content or "").strip()
-            if not text:
-                logger.warning("Memory consolidation: LLM returned empty response, skipping")
-                return
-            if text.startswith("```"):
-                text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = json_repair.loads(text)
-            if not isinstance(result, dict):
-                logger.warning(f"Memory consolidation: unexpected response type, skipping. Response: {text[:200]}")
-                return
+            result = self._parse_consolidation_result(response.content or "")
 
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
@@ -444,6 +453,71 @@ Respond with ONLY valid JSON, no markdown fences."""
             logger.info(f"Memory consolidation done: {len(session.messages)} messages, last_consolidated={session.last_consolidated}")
         except Exception as e:
             logger.error(f"Memory consolidation failed: {e}")
+            # Prevent repeated consolidation attempts on every message.
+            session.messages = session.messages[-keep_count:] if keep_count else []
+            self.sessions.save(session)
+            fallback = self._build_fallback_history_entry(old_messages, str(e))
+            try:
+                memory.append_history(fallback)
+            except Exception as history_error:
+                logger.error(f"Failed to write consolidation fallback history: {history_error}")
+            logger.warning(
+                f"Memory consolidation fallback applied; session trimmed to {len(session.messages)} messages"
+            )
+
+    def _parse_consolidation_result(self, raw: str) -> dict[str, Any]:
+        """Parse consolidation JSON robustly (handles fenced/extra text)."""
+        text = (raw or "").strip()
+        if not text:
+            raise ValueError("empty response")
+
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        candidates = [text]
+        start = text.find("{")
+        end = text.rfind("}")
+        if 0 <= start < end:
+            cropped = text[start : end + 1]
+            if cropped != text:
+                candidates.append(cropped)
+
+        for candidate in candidates:
+            try:
+                repaired = json_repair.loads(candidate)
+                if isinstance(repaired, dict):
+                    return repaired
+            except Exception:
+                pass
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+        raise ValueError("invalid JSON response")
+
+    def _build_fallback_history_entry(
+        self,
+        old_messages: list[dict[str, Any]],
+        reason: str,
+    ) -> str:
+        """Build a compact fallback history entry when LLM consolidation fails."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        snippets: list[str] = []
+        for msg in old_messages[-6:]:
+            role = msg.get("role", "?").upper()
+            content = (msg.get("content") or "").strip().replace("\n", " ")
+            if not content:
+                continue
+            snippets.append(f"{role}: {content[:120]}")
+
+        sample = " | ".join(snippets) if snippets else "(no content)"
+        return (
+            f"[{now}] Consolidation fallback: archived {len(old_messages)} messages. "
+            f"Reason: {reason}. Recent context: {sample}"
+        )
 
     async def process_direct(
         self,
@@ -469,7 +543,8 @@ Respond with ONLY valid JSON, no markdown fences."""
             channel=channel,
             sender_id="user",
             chat_id=chat_id,
-            content=content
+            content=content,
+            session_key_override=session_key,
         )
         
         response = await self._process_message(msg, session_key=session_key)

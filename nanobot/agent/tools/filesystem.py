@@ -6,11 +6,48 @@ from typing import Any
 from nanobot.agent.tools.base import Tool
 
 
+_SUSPICIOUS_ABS_LIKE_PREFIXES = (
+    "users/",
+    "home/",
+    "var/",
+    "tmp/",
+    "opt/",
+    "etc/",
+    "usr/",
+    "private/",
+)
+
+
+def _validate_path_input(path: str) -> str:
+    """Validate raw path input before normalization and resolution."""
+    if not isinstance(path, str):
+        raise ValueError("Path must be a string")
+    if not path.strip():
+        raise ValueError("Path cannot be empty or whitespace")
+    if path != path.strip():
+        raise ValueError("Path cannot have leading or trailing whitespace")
+    if "\x00" in path:
+        raise ValueError("Path cannot contain null bytes")
+
+    lowered = path.lower()
+    if (
+        not Path(path).is_absolute()
+        and not path.startswith(("./", "../", "~"))
+        and any(lowered.startswith(prefix) for prefix in _SUSPICIOUS_ABS_LIKE_PREFIXES)
+    ):
+        raise ValueError(
+            f"Path '{path}' looks like an absolute path missing leading '/'. "
+            f"Use '/{path}' or './{path}'."
+        )
+    return path
+
+
 def _resolve_path(path: str, allowed_dir: Path | None = None) -> Path:
     """Resolve path and optionally enforce directory restriction."""
-    resolved = Path(path).expanduser().resolve()
+    normalized = _validate_path_input(path)
+    resolved = Path(normalized).expanduser().resolve()
     if allowed_dir and not str(resolved).startswith(str(allowed_dir.resolve())):
-        raise PermissionError(f"Path {path} is outside allowed directory {allowed_dir}")
+        raise PermissionError(f"Path {normalized} is outside allowed directory {allowed_dir}")
     return resolved
 
 
@@ -51,7 +88,7 @@ class ReadFileTool(Tool):
             
             content = file_path.read_text(encoding="utf-8")
             return content
-        except PermissionError as e:
+        except (PermissionError, ValueError) as e:
             return f"Error: {e}"
         except Exception as e:
             return f"Error reading file: {str(e)}"
@@ -94,7 +131,7 @@ class WriteFileTool(Tool):
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {path}"
-        except PermissionError as e:
+        except (PermissionError, ValueError) as e:
             return f"Error: {e}"
         except Exception as e:
             return f"Error writing file: {str(e)}"
@@ -155,7 +192,7 @@ class EditFileTool(Tool):
             file_path.write_text(new_content, encoding="utf-8")
             
             return f"Successfully edited {path}"
-        except PermissionError as e:
+        except (PermissionError, ValueError) as e:
             return f"Error: {e}"
         except Exception as e:
             return f"Error editing file: {str(e)}"
@@ -205,7 +242,7 @@ class ListDirTool(Tool):
                 return f"Directory {path} is empty"
             
             return "\n".join(items)
-        except PermissionError as e:
+        except (PermissionError, ValueError) as e:
             return f"Error: {e}"
         except Exception as e:
             return f"Error listing directory: {str(e)}"

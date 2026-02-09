@@ -489,6 +489,21 @@ def agent(
         signal.signal(signal.SIGINT, _exit_on_sigint)
         
         async def run_interactive():
+            # Start background bus processing so async subagent results can
+            # flow back to the CLI in direct interactive mode.
+            agent_runner = asyncio.create_task(agent_loop.run())
+
+            async def print_background_replies() -> None:
+                while True:
+                    try:
+                        msg = await bus.consume_outbound()
+                        if msg.channel == "cli":
+                            _print_agent_response(msg.content, render_markdown=markdown)
+                    except asyncio.CancelledError:
+                        break
+
+            outbound_printer = asyncio.create_task(print_background_replies())
+
             try:
                 while True:
                     try:
@@ -497,7 +512,6 @@ def agent(
                         command = user_input.strip()
                         if not command:
                             continue
-
                         if _is_exit_command(command):
                             _restore_terminal()
                             console.print("\nGoodbye!")
@@ -516,6 +530,16 @@ def agent(
                         break
             finally:
                 await agent_loop.close_mcp()
+                agent_loop.stop()
+                outbound_printer.cancel()
+                try:
+                    await outbound_printer
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await agent_runner
+                except asyncio.CancelledError:
+                    pass
         
         asyncio.run(run_interactive())
 

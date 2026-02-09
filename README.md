@@ -774,7 +774,7 @@ nanobot cron remove <job_id>
 ## 🐳 Docker
 
 > [!TIP]
-> The `-v ~/.nanobot:/root/.nanobot` flag mounts your local config directory into the container, so your config and workspace persist across container restarts.
+> Use a dedicated Docker profile directory (`~/.nanobot-docker`) to keep container runtime isolated from your local CLI debugging profile (`~/.nanobot`).
 
 Build and run nanobot in a container:
 
@@ -782,18 +782,39 @@ Build and run nanobot in a container:
 # Build the image
 docker build -t nanobot .
 
-# Initialize config (first time only)
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot onboard
+# Optional (recommended on Linux): match container uid/gid to host user
+docker build -t nanobot --build-arg NB_UID="$(id -u)" --build-arg NB_GID="$(id -g)" .
 
-# Edit config on host to add API keys
-vim ~/.nanobot/config.json
+# Default now skips WhatsApp bridge build to avoid external git dependency issues.
+# Enable it only if you need WhatsApp channel:
+docker build -t nanobot --build-arg BUILD_WHATSAPP_BRIDGE=1 .
+
+# Initialize isolated Docker config (first time only)
+docker run -v ~/.nanobot-docker:/home/nanobot/.nanobot --rm nanobot onboard
+
+# Edit Docker config on host to add API keys / channels
+vim ~/.nanobot-docker/config.json
 
 # Run gateway (connects to enabled channels, e.g. Telegram/Discord/Mochat)
-docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot gateway
+docker run -v ~/.nanobot-docker:/home/nanobot/.nanobot -p 18790:18790 nanobot gateway
 
 # Or run a single command
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
+docker run -v ~/.nanobot-docker:/home/nanobot/.nanobot --rm nanobot agent -m "Hello!"
+docker run -v ~/.nanobot-docker:/home/nanobot/.nanobot --rm nanobot status
+
+# Run gateway 24/7
+docker run -d --name nanobot-gateway --restart unless-stopped \
+  -v ~/.nanobot-docker:/home/nanobot/.nanobot -p 18790:18790 nanobot gateway
+docker logs -f nanobot-gateway
+
+# Debug shell in container (override entrypoint)
+docker run --rm --entrypoint /bin/sh \
+  -v ~/.nanobot-docker:/home/nanobot/.nanobot nanobot -lc 'id && ls -la /home/nanobot/.nanobot'
+
+# Or use docker compose template
+# (default data dir: ~/.nanobot-docker; override with NANOBOT_DATA_DIR=/path)
+docker compose -f ops/docker-compose.gateway.yml up -d
+docker compose -f ops/docker-compose.gateway.yml logs -f
 ```
 
 ## 📁 Project Structure

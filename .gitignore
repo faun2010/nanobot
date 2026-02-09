@@ -1,6 +1,7 @@
 .assets
 .env
 *.pyc
+ops/
 dist/
 build/
 docs/

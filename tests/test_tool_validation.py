@@ -1,7 +1,14 @@
+from pathlib import Path
 from typing import Any
 
+import pytest
+from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools.base import Tool
+from nanobot.agent.tools.filesystem import WriteFileTool, _resolve_path
 from nanobot.agent.tools.registry import ToolRegistry
+from nanobot.bus.queue import MessageBus
+from nanobot.providers.base import LLMProvider, LLMResponse
+from nanobot.session.manager import Session
 
 
 class SampleTool(Tool):
@@ -86,3 +93,105 @@ async def test_registry_returns_validation_error() -> None:
     reg.register(SampleTool())
     result = await reg.execute("sample", {"query": "hi"})
     assert "Invalid parameters" in result
+
+
+def test_resolve_path_rejects_leading_or_trailing_whitespace() -> None:
+    with pytest.raises(ValueError, match="leading or trailing whitespace"):
+        _resolve_path(" /Users/panzm/.nanobot/workspace/memory/MEMORY.md")
+
+
+def test_resolve_path_rejects_absolute_like_relative_path() -> None:
+    with pytest.raises(ValueError, match="missing leading '/'"):
+        _resolve_path("Users/panzm/.nanobot/workspace/memory/MEMORY.md")
+
+
+@pytest.mark.asyncio
+async def test_write_file_rejects_absolute_like_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tool = WriteFileTool()
+
+    result = await tool.execute(path="Users/alice/file.txt", content="x")
+
+    assert result.startswith("Error:")
+    assert "missing leading '/'" in result
+    assert not (tmp_path / "Users").exists()
+
+
+@pytest.mark.asyncio
+async def test_write_file_allows_normal_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    tool = WriteFileTool()
+
+    result = await tool.execute(path="notes/test.txt", content="hello")
+
+    assert result.startswith("Successfully wrote")
+    assert (tmp_path / "notes" / "test.txt").read_text(encoding="utf-8") == "hello"
+
+
+class DummyProvider(LLMProvider):
+    def __init__(self, content: str | None):
+        super().__init__(api_key=None, api_base=None)
+        self._content = content
+
+    async def chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> LLMResponse:
+        return LLMResponse(content=self._content)
+
+    def get_default_model(self) -> str:
+        return "dummy"
+
+
+class DummySessions:
+    def save(self, session: Session) -> None:
+        return None
+
+
+def test_parse_consolidation_result_handles_code_fence_and_prefix(tmp_path: Path) -> None:
+    loop = AgentLoop(bus=MessageBus(), provider=DummyProvider(None), workspace=tmp_path)
+    wrapped = (
+        "Here is JSON:\n```json\n"
+        '{"history_entry":"h","memory_update":"m"}\n'
+        "```"
+    )
+    parsed = loop._parse_consolidation_result(wrapped)
+    assert parsed["history_entry"] == "h"
+    assert parsed["memory_update"] == "m"
+
+
+@pytest.mark.asyncio
+async def test_consolidate_memory_fallback_trims_and_records_history(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=DummyProvider(""),
+        workspace=tmp_path,
+        memory_window=4,
+    )
+    loop.sessions = DummySessions()
+
+    session = Session(
+        key="cli:test",
+        messages=[
+            {"role": "user", "content": "u1", "timestamp": "2026-01-01T00:00:00"},
+            {"role": "assistant", "content": "a1", "timestamp": "2026-01-01T00:00:01"},
+            {"role": "user", "content": "u2", "timestamp": "2026-01-01T00:00:02"},
+            {"role": "assistant", "content": "a2", "timestamp": "2026-01-01T00:00:03"},
+            {"role": "user", "content": "u3", "timestamp": "2026-01-01T00:00:04"},
+            {"role": "assistant", "content": "a3", "timestamp": "2026-01-01T00:00:05"},
+        ],
+    )
+
+    await loop._consolidate_memory(session)
+
+    assert len(session.messages) == 2
+    history_text = (tmp_path / "memory" / "HISTORY.md").read_text(encoding="utf-8")
+    assert "Consolidation fallback" in history_text
