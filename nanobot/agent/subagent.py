@@ -14,7 +14,7 @@ from nanobot.providers.base import LLMProvider
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from nanobot.agent.tools.shell import ExecTool
-from nanobot.agent.tools.web import WebSearchTool, WebFetchTool
+from nanobot.agent.tools.web import OnlineSearchTool, WebSearchTool, WebFetchTool
 
 
 class SubagentManager:
@@ -113,6 +113,7 @@ class SubagentManager:
                 restrict_to_workspace=self.restrict_to_workspace,
             ))
             tools.register(WebSearchTool(api_key=self.brave_api_key))
+            tools.register(OnlineSearchTool())
             tools.register(WebFetchTool())
             
             # Build messages with subagent-specific prompt
