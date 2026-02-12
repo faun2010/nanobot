@@ -471,30 +471,57 @@ def agent(
         signal.signal(signal.SIGINT, _exit_on_sigint)
         
         async def run_interactive():
-            while True:
-                try:
-                    _flush_pending_tty_input()
-                    user_input = await _read_interactive_input_async()
-                    command = user_input.strip()
-                    if not command:
-                        continue
+            # Start background bus processing so async subagent results can
+            # flow back to the CLI in direct interactive mode.
+            agent_runner = asyncio.create_task(agent_loop.run())
 
-                    if _is_exit_command(command):
+            async def print_background_replies() -> None:
+                while True:
+                    try:
+                        msg = await bus.consume_outbound()
+                        if msg.channel == "cli":
+                            _print_agent_response(msg.content, render_markdown=markdown)
+                    except asyncio.CancelledError:
+                        break
+
+            outbound_printer = asyncio.create_task(print_background_replies())
+
+            try:
+                while True:
+                    try:
+                        _flush_pending_tty_input()
+                        user_input = await _read_interactive_input_async()
+                        command = user_input.strip()
+                        if not command:
+                            continue
+
+                        if _is_exit_command(command):
+                            _restore_terminal()
+                            console.print("\nGoodbye!")
+                            break
+
+                        with _thinking_ctx():
+                            response = await agent_loop.process_direct(user_input, session_id)
+                        _print_agent_response(response, render_markdown=markdown)
+                    except KeyboardInterrupt:
                         _restore_terminal()
                         console.print("\nGoodbye!")
                         break
-                    
-                    with _thinking_ctx():
-                        response = await agent_loop.process_direct(user_input, session_id)
-                    _print_agent_response(response, render_markdown=markdown)
-                except KeyboardInterrupt:
-                    _restore_terminal()
-                    console.print("\nGoodbye!")
-                    break
-                except EOFError:
-                    _restore_terminal()
-                    console.print("\nGoodbye!")
-                    break
+                    except EOFError:
+                        _restore_terminal()
+                        console.print("\nGoodbye!")
+                        break
+            finally:
+                agent_loop.stop()
+                outbound_printer.cancel()
+                try:
+                    await outbound_printer
+                except asyncio.CancelledError:
+                    pass
+                try:
+                    await agent_runner
+                except asyncio.CancelledError:
+                    pass
         
         asyncio.run(run_interactive())
 

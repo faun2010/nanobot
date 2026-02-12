@@ -20,8 +20,15 @@ class ContextBuilder:
     
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
     
-    def __init__(self, workspace: Path):
+    def __init__(
+        self,
+        workspace: Path,
+        model: str | None = None,
+        resolved_model: str | None = None,
+    ):
         self.workspace = workspace
+        self.model = model
+        self.resolved_model = resolved_model or model
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
     
@@ -79,6 +86,10 @@ Skills with available="false" need dependencies installed first - you can try in
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
+        model_lines = [f"Configured model: {self.model or '(not set)'}"]
+        if self.resolved_model and self.resolved_model != self.model:
+            model_lines.append(f"Resolved model: {self.resolved_model}")
+        model_info = "\n".join(model_lines)
         
         return f"""# nanobot 🐈
 
@@ -94,6 +105,9 @@ You are nanobot, a helpful AI assistant. You have access to tools that allow you
 
 ## Runtime
 {runtime}
+
+## Model
+{model_info}
 
 ## Workspace
 Your workspace is at: {workspace_path}
