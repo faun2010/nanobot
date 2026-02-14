@@ -237,6 +237,9 @@ def _make_provider(config: Config):
 
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
+    # Ensure LiteLLM uses local model-cost map before provider import for vLLM setups.
+    if provider_name == "vllm":
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     p = config.get_provider(model)
 
     # OpenAI Codex (OAuth)
