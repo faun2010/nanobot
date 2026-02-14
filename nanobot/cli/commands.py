@@ -280,6 +280,11 @@ This file stores important information that should persist across sessions.
 
 def _make_provider(config):
     """Create LiteLLMProvider from config. Exits if no API key found."""
+    provider_name = config.get_provider_name()
+    # Ensure LiteLLM uses local model-cost map before provider import for vLLM setups.
+    if provider_name == "vllm":
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
     from nanobot.providers.litellm_provider import LiteLLMProvider
     p = config.get_provider()
     model = config.agents.defaults.model
@@ -292,7 +297,7 @@ def _make_provider(config):
         api_base=config.get_api_base(),
         default_model=model,
         extra_headers=p.extra_headers if p else None,
-        provider_name=config.get_provider_name(),
+        provider_name=provider_name,
     )
 
 

@@ -45,10 +45,24 @@ class LiteLLMProvider(LLMProvider):
         if api_base:
             litellm.api_base = api_base
         
+        self._apply_local_runtime_defaults()
+        
         # Disable LiteLLM logging noise
         litellm.suppress_debug_info = True
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
+
+    def _apply_local_runtime_defaults(self) -> None:
+        """Apply runtime defaults for local providers (e.g. vLLM)."""
+        if self._gateway and self._gateway.is_local:
+            # Avoid remote model-cost map fetches/noise in local-only deployments.
+            os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+    def _apply_local_cost_overrides(self, kwargs: dict[str, Any]) -> None:
+        """Use explicit zero-cost pricing for local models to avoid cost-map lookups."""
+        if self._gateway and self._gateway.is_local:
+            kwargs.setdefault("input_cost_per_token", 0.0)
+            kwargs.setdefault("output_cost_per_token", 0.0)
     
     def _setup_env(self, api_key: str, api_base: str | None, model: str) -> None:
         """Set environment variables based on detected provider."""
@@ -136,6 +150,8 @@ class LiteLLMProvider(LLMProvider):
         
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
+        # Local deployments don't need external price resolution.
+        self._apply_local_cost_overrides(kwargs)
         
         # Pass api_key directly — more reliable than env vars alone
         if self.api_key:
