@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
+from nanobot.utils.secrets import redact_sensitive_text
 
 
 _SUSPICIOUS_ABS_LIKE_PREFIXES = (
@@ -95,7 +96,8 @@ class ReadFileTool(Tool):
                 return f"Error: Not a file: {path}"
 
             content = file_path.read_text(encoding="utf-8")
-            return content
+            # Redact common secret keys before exposing file content to the model.
+            return redact_sensitive_text(content)
         except (PermissionError, ValueError) as e:
             return f"Error: {e}"
         except Exception as e:

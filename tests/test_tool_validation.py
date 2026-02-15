@@ -4,11 +4,12 @@ from typing import Any
 import pytest
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools.base import Tool
-from nanobot.agent.tools.filesystem import WriteFileTool, _resolve_path
+from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, _resolve_path
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider, LLMResponse
 from nanobot.session.manager import Session
+from nanobot.utils.secrets import extract_secret_values, redact_sensitive_text
 
 
 class SampleTool(Tool):
@@ -154,6 +155,89 @@ class DummyProvider(LLMProvider):
 class DummySessions:
     def save(self, session: Session) -> None:
         return None
+
+
+class InMemorySessions:
+    def __init__(self) -> None:
+        self._sessions: dict[str, Session] = {}
+
+    def get_or_create(self, key: str) -> Session:
+        return self._sessions.setdefault(key, Session(key=key))
+
+    def save(self, session: Session) -> None:
+        self._sessions[session.key] = session
+
+    def invalidate(self, key: str) -> None:
+        self._sessions.pop(key, None)
+
+
+def test_extract_secret_values_from_config_like_dict() -> None:
+    data = {
+        "channels": {
+            "email": {
+                "imapPassword": "imap-secret-123",
+                "smtpPassword": "smtp-secret-456",
+                "imapHost": "imap.gmail.com",
+            },
+            "telegram": {"token": "123456:AA-telegram-token"},
+        },
+        "providers": {"openai": {"apiKey": "sk-test-987654321"}},
+    }
+
+    values = extract_secret_values(data)
+    assert "imap-secret-123" in values
+    assert "smtp-secret-456" in values
+    assert "123456:AA-telegram-token" in values
+    assert "sk-test-987654321" in values
+    assert "imap.gmail.com" not in values
+
+
+def test_redact_sensitive_text_masks_key_values_and_known_secret() -> None:
+    text = (
+        '{"imapPassword":"imap-secret-123","normal":"ok"}\n'
+        "SMTP_PASSWORD=smtp-secret-456\n"
+        "token: 123456:AA-telegram-token\n"
+        "raw=sk-test-987654321\n"
+    )
+    output = redact_sensitive_text(text, known_secrets=["sk-test-987654321"])
+
+    assert "imap-secret-123" not in output
+    assert "smtp-secret-456" not in output
+    assert "123456:AA-telegram-token" not in output
+    assert "sk-test-987654321" not in output
+    assert "***" in output
+
+
+@pytest.mark.asyncio
+async def test_read_file_tool_redacts_sensitive_pairs(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"channels":{"email":{"imapPassword":"imap-secret-123"}}}\n'
+        "SMTP_PASSWORD=smtp-secret-456\n",
+        encoding="utf-8",
+    )
+
+    tool = ReadFileTool()
+    output = await tool.execute(path=str(config_path))
+
+    assert "imap-secret-123" not in output
+    assert "smtp-secret-456" not in output
+    assert "***" in output
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_redacts_known_secret_in_final_response(tmp_path: Path) -> None:
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=DummyProvider("Your imapPassword is imap-secret-123"),
+        workspace=tmp_path,
+        session_manager=InMemorySessions(),
+        secret_values=["imap-secret-123"],
+    )
+
+    response = await loop.process_direct("show secret")
+    assert "imap-secret-123" not in response
+    assert "***" in response
 
 
 def test_parse_consolidation_result_handles_code_fence_and_prefix(tmp_path: Path) -> None:

@@ -26,6 +26,7 @@ from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
 from nanobot.session.manager import Session, SessionManager
+from nanobot.utils.secrets import redact_sensitive_text
 
 if TYPE_CHECKING:
     from nanobot.config.schema import ChannelsConfig, ExecToolConfig
@@ -61,6 +62,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
+        secret_values: list[str] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
@@ -76,6 +78,7 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.secret_values = [s for s in (secret_values or []) if isinstance(s, str) and s.strip()]
 
         self.context = ContextBuilder(workspace)
         self.sessions = session_manager or SessionManager(workspace)
@@ -101,6 +104,9 @@ class AgentLoop:
         self._consolidation_tasks: set[asyncio.Task] = set()  # Strong refs to in-flight tasks
         self._consolidation_locks: dict[str, asyncio.Lock] = {}
         self._register_default_tools()
+
+    def _redact(self, text: str | None) -> str:
+        return redact_sensitive_text(text or "", known_secrets=self.secret_values)
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -222,8 +228,10 @@ class AgentLoop:
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info("Tool call: {}({})", tool_call.name, args_str[:200])
+                    safe_args = self._redact(args_str)
+                    logger.info("Tool call: {}({})", tool_call.name, safe_args[:200])
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = self._redact(result)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -261,11 +269,12 @@ class AgentLoop:
                             channel=msg.channel, chat_id=msg.chat_id, content="", metadata=msg.metadata or {},
                         ))
                 except Exception as e:
-                    logger.error("Error processing message: {}", e)
+                    safe_error = self._redact(str(e))
+                    logger.error("Error processing message: {}", safe_error)
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}"
+                        content=f"Sorry, I encountered an error: {safe_error}"
                     ))
             except asyncio.TimeoutError:
                 continue
@@ -319,10 +328,12 @@ class AgentLoop:
             final_content, _, all_msgs = await self._run_agent_loop(messages)
             self._save_turn(session, all_msgs, 1 + len(history))
             self.sessions.save(session)
+            final_content = self._redact(final_content or "Background task completed.")
             return OutboundMessage(channel=channel, chat_id=chat_id,
-                                  content=final_content or "Background task completed.")
+                                  content=final_content)
 
-        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+        safe_input = self._redact(msg.content)
+        preview = safe_input[:80] + "..." if len(safe_input) > 80 else safe_input
         logger.info("Processing message from {}:{}: {}", msg.channel, msg.sender_id, preview)
 
         key = session_key or msg.session_key
@@ -400,7 +411,7 @@ class AgentLoop:
             meta["_progress"] = True
             meta["_tool_hint"] = tool_hint
             await self.bus.publish_outbound(OutboundMessage(
-                channel=msg.channel, chat_id=msg.chat_id, content=content, metadata=meta,
+                channel=msg.channel, chat_id=msg.chat_id, content=self._redact(content), metadata=meta,
             ))
 
         final_content, _, all_msgs = await self._run_agent_loop(
@@ -409,6 +420,7 @@ class AgentLoop:
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
+        final_content = self._redact(final_content)
 
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", msg.channel, msg.sender_id, preview)
