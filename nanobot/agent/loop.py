@@ -25,6 +25,7 @@ from nanobot.agent.tools.now_time import NowTimeTool
 from nanobot.agent.memory import MemoryStore
 from nanobot.agent.subagent import SubagentManager
 from nanobot.session.manager import Session, SessionManager
+from nanobot.utils.secrets import redact_sensitive_text
 
 
 class AgentLoop:
@@ -55,6 +56,7 @@ class AgentLoop:
         restrict_to_workspace: bool = False,
         session_manager: SessionManager | None = None,
         mcp_servers: dict | None = None,
+        secret_values: list[str] | None = None,
     ):
         from nanobot.config.schema import ExecToolConfig
         from nanobot.cron.service import CronService
@@ -70,6 +72,7 @@ class AgentLoop:
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
+        self.secret_values = [s for s in (secret_values or []) if isinstance(s, str) and s.strip()]
 
         resolved_model = self.model
         resolve_model = getattr(self.provider, "_resolve_model", None)
@@ -103,6 +106,9 @@ class AgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_connected = False
         self._register_default_tools()
+
+    def _redact(self, text: str | None) -> str:
+        return redact_sensitive_text(text or "", known_secrets=self.secret_values)
     
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
@@ -210,8 +216,10 @@ class AgentLoop:
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
+                    safe_args = self._redact(args_str)
+                    logger.info(f"Tool call: {tool_call.name}({safe_args[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
+                    result = self._redact(result)
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
@@ -239,11 +247,12 @@ class AgentLoop:
                     if response:
                         await self.bus.publish_outbound(response)
                 except Exception as e:
-                    logger.error(f"Error processing message: {e}")
+                    safe_error = self._redact(str(e))
+                    logger.error(f"Error processing message: {safe_error}")
                     await self.bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=f"Sorry, I encountered an error: {str(e)}"
+                        content=f"Sorry, I encountered an error: {safe_error}"
                     ))
             except asyncio.TimeoutError:
                 continue
@@ -277,7 +286,8 @@ class AgentLoop:
         if msg.channel == "system":
             return await self._process_system_message(msg)
         
-        preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
+        safe_input = self._redact(msg.content)
+        preview = safe_input[:80] + "..." if len(safe_input) > 80 else safe_input
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
         
         key = session_key or msg.session_key
@@ -319,6 +329,7 @@ class AgentLoop:
 
         if final_content is None:
             final_content = "I've completed processing but have no response to give."
+        final_content = self._redact(final_content)
         
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.channel}:{msg.sender_id}: {preview}")
@@ -367,6 +378,7 @@ class AgentLoop:
 
         if final_content is None:
             final_content = "Background task completed."
+        final_content = self._redact(final_content)
         
         session.add_message("user", f"[System: {msg.sender_id}] {msg.content}")
         session.add_message("assistant", final_content)
@@ -412,7 +424,8 @@ class AgentLoop:
             if not m.get("content"):
                 continue
             tools = f" [tools: {', '.join(m['tools_used'])}]" if m.get("tools_used") else ""
-            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools}: {m['content']}")
+            safe_content = self._redact(str(m["content"]))
+            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools}: {safe_content}")
         conversation = "\n".join(lines)
         current_memory = memory.read_long_term()
 
@@ -452,15 +465,17 @@ Respond with ONLY valid JSON, no markdown fences."""
                 session.last_consolidated = len(session.messages) - keep_count
             logger.info(f"Memory consolidation done: {len(session.messages)} messages, last_consolidated={session.last_consolidated}")
         except Exception as e:
-            logger.error(f"Memory consolidation failed: {e}")
+            safe_error = self._redact(str(e))
+            logger.error(f"Memory consolidation failed: {safe_error}")
             # Prevent repeated consolidation attempts on every message.
             session.messages = session.messages[-keep_count:] if keep_count else []
             self.sessions.save(session)
-            fallback = self._build_fallback_history_entry(old_messages, str(e))
+            fallback = self._build_fallback_history_entry(old_messages, safe_error)
             try:
                 memory.append_history(fallback)
             except Exception as history_error:
-                logger.error(f"Failed to write consolidation fallback history: {history_error}")
+                safe_history_error = self._redact(str(history_error))
+                logger.error(f"Failed to write consolidation fallback history: {safe_history_error}")
             logger.warning(
                 f"Memory consolidation fallback applied; session trimmed to {len(session.messages)} messages"
             )
@@ -508,7 +523,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         snippets: list[str] = []
         for msg in old_messages[-6:]:
             role = msg.get("role", "?").upper()
-            content = (msg.get("content") or "").strip().replace("\n", " ")
+            content = self._redact((msg.get("content") or "").strip().replace("\n", " "))
             if not content:
                 continue
             snippets.append(f"{role}: {content[:120]}")
@@ -516,7 +531,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         sample = " | ".join(snippets) if snippets else "(no content)"
         return (
             f"[{now}] Consolidation fallback: archived {len(old_messages)} messages. "
-            f"Reason: {reason}. Recent context: {sample}"
+            f"Reason: {self._redact(reason)}. Recent context: {sample}"
         )
 
     async def process_direct(

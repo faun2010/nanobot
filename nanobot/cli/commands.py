@@ -320,6 +320,7 @@ def gateway(
     from nanobot.cron.service import CronService
     from nanobot.cron.types import CronJob
     from nanobot.heartbeat.service import HeartbeatService
+    from nanobot.utils.secrets import extract_secret_values
     
     if verbose:
         import logging
@@ -328,6 +329,7 @@ def gateway(
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
     
     config = load_config()
+    secret_values = extract_secret_values(config.model_dump())
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
@@ -352,6 +354,7 @@ def gateway(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
         mcp_servers=config.tools.mcp_servers,
+        secret_values=secret_values,
     )
     
     # Set cron callback (needs agent)
@@ -438,8 +441,10 @@ def agent(
     from nanobot.bus.queue import MessageBus
     from nanobot.agent.loop import AgentLoop
     from loguru import logger
+    from nanobot.utils.secrets import extract_secret_values
     
     config = load_config()
+    secret_values = extract_secret_values(config.model_dump())
     
     bus = MessageBus()
     provider = _make_provider(config)
@@ -462,6 +467,7 @@ def agent(
         exec_config=config.tools.exec,
         restrict_to_workspace=config.tools.restrict_to_workspace,
         mcp_servers=config.tools.mcp_servers,
+        secret_values=secret_values,
     )
     
     # Show spinner when logs are off (no output to miss); skip when logs are on
