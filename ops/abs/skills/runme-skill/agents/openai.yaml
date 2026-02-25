@@ -1,0 +1,4 @@
+interface:
+  display_name: "WhiteBull Runme Skill"
+  short_description: "Strict non-interactive paga-style runme fill with deterministic correction and validation"
+  default_prompt: "Process split works under an album by running strict non-interactive runme fill, deduplicating and correcting runme write/show/info keys, and enforcing hard validation gates before any publish action."

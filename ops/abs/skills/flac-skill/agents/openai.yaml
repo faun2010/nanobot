@@ -1,0 +1,4 @@
+interface:
+  display_name: "WhiteBull FLAC Skill"
+  short_description: "Strict FLAC preprocess with CUE split, verified source-FLAC cleanup, and multi-disc consolidate"
+  default_prompt: "Preprocess a source tree by converting to FLAC, splitting by normalized CUE, skipping damaged source FLAC files, deleting unsplit source FLAC only after split outputs are verified complete, moving single-disc split tracks to album root, and consolidating multi-disc subfolders with strict WhiteBull tooling."

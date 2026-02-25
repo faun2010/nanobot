@@ -1,0 +1,4 @@
+version: 1
+agent:
+  short_description: "Strict final publish of work folders via existing WhiteBull scripts"
+  default_prompt: "Publish processed work folders to target MUSIC_ROOT using existing runme/abs_runme/abs_ccdt/publish scripts with validation, and report exact target paths plus failures."

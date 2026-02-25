@@ -1,0 +1,4 @@
+interface:
+  display_name: "WhiteBull Cover Skill"
+  short_description: "Strict cover.jpg generation and 1024x1024 validation"
+  default_prompt: "Prepare cover.jpg from scan images with fixed crop side and strict 1024 square validation."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "WhiteBull Album Skill"
+  short_description: "Infer catno, fetch MB/Discogs metadata, then split multi-work albums with liszt_digWorksNum"
+  default_prompt: "Fetch album metadata DB/JSON by inferring catalog number from local clues (dir/file/cue/pdf/image OCR), resolving MusicBrainz release first with Discogs fallback, then separate different works via liszt_digWorksNum.sh when applicable."

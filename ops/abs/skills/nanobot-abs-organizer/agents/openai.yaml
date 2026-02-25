@@ -1,0 +1,4 @@
+interface:
+  display_name: "Nanobot ABS Organizer"
+  short_description: "WhiteBull organize flow with flac-skill preprocessing and cover separation"
+  default_prompt: "Organize music from source to target by running flac-skill first (including damaged FLAC skip behavior), then WhiteBull discover/organize with cover work delegated to cover-skill."
