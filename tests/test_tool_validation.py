@@ -1,13 +1,19 @@
+import asyncio
+import base64
+import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
+
 from nanobot.agent.loop import AgentLoop
 from nanobot.agent.tools.base import Tool
 from nanobot.agent.tools.filesystem import ReadFileTool, WriteFileTool, _resolve_path
 from nanobot.agent.tools.registry import ToolRegistry
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider, LLMResponse
+from nanobot.providers.logging_provider import LLMLoggingProvider
 from nanobot.session.manager import Session
 from nanobot.utils.secrets import extract_secret_values, redact_sensitive_text
 
@@ -279,3 +285,52 @@ async def test_consolidate_memory_fallback_trims_and_records_history(tmp_path: P
     assert len(session.messages) == 2
     history_text = (tmp_path / "memory" / "HISTORY.md").read_text(encoding="utf-8")
     assert "Consolidation fallback" in history_text
+
+
+def _latest_llm_log_entry(workspace: Path) -> dict[str, Any]:
+    day = datetime.now().strftime("%Y-%m-%d")
+    log_file = workspace / "logs" / f"llm_api_{day}.jsonl"
+    assert log_file.exists()
+    lines = log_file.read_text(encoding="utf-8").strip().splitlines()
+    return json.loads(lines[-1])
+
+
+def test_llm_logging_provider_writes_roundtrip_logs(tmp_path: Path) -> None:
+    provider = LLMLoggingProvider(DummyProvider("pong"), tmp_path)
+    asyncio.run(provider.chat(messages=[{"role": "user", "content": "ping"}], model="dummy-model"))
+
+    entry = _latest_llm_log_entry(tmp_path)
+    assert entry["request"]["messages"][0]["content"] == "ping"
+    assert entry["response"]["content"] == "pong"
+    assert entry["attachments"] == []
+
+
+def test_llm_logging_provider_decodes_data_url_attachment(tmp_path: Path) -> None:
+    payload = base64.b64encode(b"hello-attachment").decode("ascii")
+    data_url = f"data:text/plain;base64,{payload}"
+
+    provider = LLMLoggingProvider(DummyProvider("ok"), tmp_path)
+    asyncio.run(
+        provider.chat(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": data_url}},
+                        {"type": "text", "text": "with attachment"},
+                    ],
+                }
+            ],
+            model="dummy-model",
+        )
+    )
+
+    entry = _latest_llm_log_entry(tmp_path)
+    logged_url = entry["request"]["messages"][0]["content"][0]["image_url"]["url"]
+    assert "[decoded_attachment path=" in logged_url
+    assert entry["attachments"]
+
+    rel_path = entry["attachments"][0]["path"]
+    attachment_file = tmp_path / rel_path
+    assert attachment_file.exists()
+    assert attachment_file.read_bytes() == b"hello-attachment"

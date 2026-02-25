@@ -7,7 +7,7 @@ import json
 import re
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from loguru import logger
 
@@ -25,6 +25,7 @@ from nanobot.agent.tools.web import OnlineSearchTool, WebFetchTool, WebSearchToo
 from nanobot.bus.events import InboundMessage, OutboundMessage
 from nanobot.bus.queue import MessageBus
 from nanobot.providers.base import LLMProvider
+from nanobot.providers.logging_provider import LLMLoggingProvider
 from nanobot.session.manager import Session, SessionManager
 from nanobot.utils.secrets import redact_sensitive_text
 
@@ -67,9 +68,13 @@ class AgentLoop:
         from nanobot.config.schema import ExecToolConfig
         self.bus = bus
         self.channels_config = channels_config
-        self.provider = provider
+        self.provider = (
+            provider
+            if isinstance(provider, LLMLoggingProvider)
+            else LLMLoggingProvider(provider, workspace)
+        )
         self.workspace = workspace
-        self.model = model or provider.get_default_model()
+        self.model = model or self.provider.get_default_model()
         self.max_iterations = max_iterations
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -84,7 +89,7 @@ class AgentLoop:
         self.sessions = session_manager or SessionManager(workspace)
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
-            provider=provider,
+            provider=self.provider,
             workspace=workspace,
             bus=bus,
             model=self.model,

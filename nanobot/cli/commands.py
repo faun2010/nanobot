@@ -234,6 +234,7 @@ def _make_provider(config: Config):
     from nanobot.providers.litellm_provider import LiteLLMProvider
     from nanobot.providers.openai_codex_provider import OpenAICodexProvider
     from nanobot.providers.custom_provider import CustomProvider
+    from nanobot.providers.logging_provider import LLMLoggingProvider
 
     model = config.agents.defaults.model
     provider_name = config.get_provider_name(model)
@@ -244,15 +245,17 @@ def _make_provider(config: Config):
 
     # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        return OpenAICodexProvider(default_model=model)
+        provider = OpenAICodexProvider(default_model=model)
+        return LLMLoggingProvider(provider, config.workspace_path)
 
     # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
     if provider_name == "custom":
-        return CustomProvider(
+        provider = CustomProvider(
             api_key=p.api_key if p else "no-key",
             api_base=config.get_api_base(model) or "http://localhost:8000/v1",
             default_model=model,
         )
+        return LLMLoggingProvider(provider, config.workspace_path)
 
     from nanobot.providers.registry import find_by_name
     spec = find_by_name(provider_name)
@@ -261,13 +264,14 @@ def _make_provider(config: Config):
         console.print("Set one in ~/.nanobot/config.json under providers section")
         raise typer.Exit(1)
 
-    return LiteLLMProvider(
+    provider = LiteLLMProvider(
         api_key=p.api_key if p else None,
         api_base=config.get_api_base(model),
         default_model=model,
         extra_headers=p.extra_headers if p else None,
         provider_name=provider_name,
     )
+    return LLMLoggingProvider(provider, config.workspace_path)
 
 
 # ============================================================================
