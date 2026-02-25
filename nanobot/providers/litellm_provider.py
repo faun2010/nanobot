@@ -1,15 +1,23 @@
 """LiteLLM provider implementation for multi-provider support."""
 
+import copy
+from datetime import datetime
 import json
 import json_repair
 import os
+from pathlib import Path
+from threading import Lock
 from typing import Any
+from uuid import uuid4
 
 import litellm
 from litellm import acompletion
+from loguru import logger
 
 from nanobot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from nanobot.providers.registry import find_by_model, find_gateway
+
+_TRACE_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 class LiteLLMProvider(LLMProvider):
@@ -32,6 +40,17 @@ class LiteLLMProvider(LLMProvider):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+
+        self._trace_enabled = os.environ.get("NANOBOT_LLM_TRACE", "").strip().lower() in _TRACE_TRUE_VALUES
+        trace_file = os.environ.get("NANOBOT_LLM_TRACE_FILE", "").strip()
+        trace_dir = os.environ.get("NANOBOT_LLM_TRACE_DIR", "").strip()
+        if trace_file:
+            self._trace_file = Path(trace_file).expanduser()
+            self._trace_dir: Path | None = None
+        else:
+            self._trace_file = None
+            self._trace_dir = Path(trace_dir).expanduser() if trace_dir else (Path.home() / ".nanobot" / "logs")
+        self._trace_lock = Lock()
         
         # Detect gateway / local deployment.
         # provider_name (from config key) is the primary signal;
@@ -51,6 +70,65 @@ class LiteLLMProvider(LLMProvider):
         litellm.suppress_debug_info = True
         # Drop unsupported parameters for providers (e.g., gpt-5 rejects some params)
         litellm.drop_params = True
+        if self._trace_enabled:
+            if self._trace_file:
+                logger.info(f"LLM trace enabled: {self._trace_file}")
+            else:
+                logger.info(f"LLM trace enabled: {self._trace_dir}/llm_trace_YYYY-MM-DD.jsonl")
+
+    def _resolve_trace_path(self) -> Path:
+        """Resolve trace file path (daily-rotated when using trace directory)."""
+        if self._trace_file:
+            return self._trace_file
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        base_dir = self._trace_dir or (Path.home() / ".nanobot" / "logs")
+        return base_dir / f"llm_trace_{date_str}.jsonl"
+
+    def _sanitize_messages_for_trace(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Prepare messages for trace logging (omit base64 image payloads)."""
+        sanitized: list[dict[str, Any]] = []
+        for message in messages:
+            msg = copy.deepcopy(message)
+            content = msg.get("content")
+            if isinstance(content, list):
+                cleaned_parts: list[Any] = []
+                for part in content:
+                    if (
+                        isinstance(part, dict)
+                        and part.get("type") == "image_url"
+                        and isinstance(part.get("image_url"), dict)
+                    ):
+                        image = dict(part.get("image_url") or {})
+                        url = image.get("url")
+                        if isinstance(url, str) and url.startswith("data:"):
+                            image["url"] = "<omitted:data-url>"
+                        cleaned_parts.append({"type": "image_url", "image_url": image})
+                    else:
+                        cleaned_parts.append(part)
+                msg["content"] = cleaned_parts
+            sanitized.append(msg)
+        return sanitized
+
+    def _trace_event(self, event: str, request_id: str, payload: dict[str, Any]) -> None:
+        """Append a single LLM trace event to JSONL file when enabled."""
+        if not self._trace_enabled:
+            return
+        record = {
+            "ts": datetime.now().astimezone().isoformat(),
+            "event": event,
+            "request_id": request_id,
+            **payload,
+        }
+        try:
+            line = json.dumps(record, ensure_ascii=False, default=str)
+            trace_path = self._resolve_trace_path()
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._trace_lock:
+                with trace_path.open("a", encoding="utf-8") as f:
+                    f.write(line)
+                    f.write("\n")
+        except Exception as e:
+            logger.warning(f"Failed to write LLM trace: {e}")
 
     def _apply_local_runtime_defaults(self) -> None:
         """Apply runtime defaults for local providers (e.g. vLLM)."""
@@ -135,6 +213,7 @@ class LiteLLMProvider(LLMProvider):
         Returns:
             LLMResponse with content and/or tool calls.
         """
+        request_id = str(uuid4())
         model = self._resolve_model(model or self.default_model)
         
         # Clamp max_tokens to at least 1 — negative or zero values cause
@@ -168,11 +247,48 @@ class LiteLLMProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        self._trace_event(
+            "llm_request",
+            request_id,
+            {
+                "model": model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": self._sanitize_messages_for_trace(messages),
+                "tools": tools or [],
+                "tool_choice": kwargs.get("tool_choice"),
+            },
+        )
         
         try:
             response = await acompletion(**kwargs)
-            return self._parse_response(response)
+            parsed = self._parse_response(response)
+            self._trace_event(
+                "llm_response",
+                request_id,
+                {
+                    "content": parsed.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                        for tc in parsed.tool_calls
+                    ],
+                    "finish_reason": parsed.finish_reason,
+                    "usage": parsed.usage,
+                    "reasoning_content": parsed.reasoning_content,
+                },
+            )
+            return parsed
         except Exception as e:
+            self._trace_event(
+                "llm_error",
+                request_id,
+                {"error": str(e)},
+            )
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",

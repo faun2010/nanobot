@@ -310,6 +310,16 @@ def _make_provider(config):
 def gateway(
     port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    llm_trace: bool = typer.Option(
+        True,
+        "--llm-trace/--no-llm-trace",
+        help="Enable/disable LLM request/response trace logging",
+    ),
+    llm_trace_file: str | None = typer.Option(
+        None,
+        "--llm-trace-file",
+        help="LLM trace JSONL path (overrides daily files in workspace/.logs)",
+    ),
 ):
     """Start the nanobot gateway."""
     from nanobot.config.loader import load_config, get_data_dir
@@ -325,10 +335,34 @@ def gateway(
     if verbose:
         import logging
         logging.basicConfig(level=logging.DEBUG)
+
+    config = load_config()
+
+    trace_enabled = llm_trace or bool(llm_trace_file)
+    if trace_enabled:
+        os.environ["NANOBOT_LLM_TRACE"] = "1"
+    else:
+        os.environ.pop("NANOBOT_LLM_TRACE", None)
+
+    if llm_trace_file:
+        os.environ["NANOBOT_LLM_TRACE_FILE"] = str(Path(llm_trace_file).expanduser())
+        os.environ.pop("NANOBOT_LLM_TRACE_DIR", None)
+    elif trace_enabled:
+        trace_dir = config.workspace_path / ".logs"
+        os.environ["NANOBOT_LLM_TRACE_DIR"] = str(trace_dir)
+        os.environ.pop("NANOBOT_LLM_TRACE_FILE", None)
+    else:
+        os.environ.pop("NANOBOT_LLM_TRACE_FILE", None)
+        os.environ.pop("NANOBOT_LLM_TRACE_DIR", None)
     
     console.print(f"{__logo__} Starting nanobot gateway on port {port}...")
+    if trace_enabled:
+        if llm_trace_file:
+            trace_target = Path(llm_trace_file).expanduser()
+        else:
+            trace_target = config.workspace_path / ".logs" / "llm_trace_YYYY-MM-DD.jsonl"
+        console.print(f"[green]✓[/green] LLM trace enabled: {trace_target}")
     
-    config = load_config()
     secret_values = extract_secret_values(config.model_dump())
     bus = MessageBus()
     provider = _make_provider(config)

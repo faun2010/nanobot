@@ -747,12 +747,36 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 | `nanobot agent` | Interactive chat mode |
 | `nanobot agent --no-markdown` | Show plain-text replies |
 | `nanobot agent --logs` | Show runtime logs during chat |
-| `nanobot gateway` | Start the gateway |
+| `nanobot gateway` | Start the gateway (LLM trace enabled by default) |
+| `nanobot gateway --no-llm-trace` | Disable LLM trace logging |
+| `nanobot gateway --llm-trace-file ~/.nanobot/logs/custom.jsonl` | Write trace to a custom file |
 | `nanobot status` | Show status |
 | `nanobot channels login` | Link WhatsApp (scan QR) |
 | `nanobot channels status` | Show channel status |
 
 Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
+
+<details>
+<summary><b>LLM API Trace (Gateway)</b></summary>
+
+```bash
+# Default: enabled, daily files under workspace/.logs/
+nanobot gateway
+
+# Disable trace
+nanobot gateway --no-llm-trace
+
+# Custom trace file path
+nanobot gateway --llm-trace-file ~/.nanobot/logs/gateway_trace.jsonl
+```
+
+Default trace path:
+`<workspace>/.logs/llm_trace_YYYY-MM-DD.jsonl`
+
+> [!WARNING]
+> Trace files include full prompts and model outputs. Handle them as sensitive data.
+
+</details>
 
 <details>
 <summary><b>Scheduled Tasks (Cron)</b></summary>

@@ -458,10 +458,34 @@ class ProvidersConfig(BaseModel):
 | `nanobot onboard` | 初始化配置与工作区 |
 | `nanobot agent -m "..."` | 与 Agent 对话 |
 | `nanobot agent` | 交互式聊天模式 |
-| `nanobot gateway` | 启动网关 |
+| `nanobot gateway` | 启动网关（默认开启 LLM trace） |
+| `nanobot gateway --no-llm-trace` | 关闭 LLM trace 日志 |
+| `nanobot gateway --llm-trace-file ~/.nanobot/logs/custom.jsonl` | 写入自定义 trace 文件 |
 | `nanobot status` | 查看状态 |
 | `nanobot channels login` | 关联 WhatsApp（扫码） |
 | `nanobot channels status` | 查看渠道状态 |
+
+<details>
+<summary><b>LLM API Trace（Gateway）</b></summary>
+
+```bash
+# 默认已开启：按天写入 workspace/.logs/
+nanobot gateway
+
+# 关闭 trace
+nanobot gateway --no-llm-trace
+
+# 自定义 trace 文件路径
+nanobot gateway --llm-trace-file ~/.nanobot/logs/gateway_trace.jsonl
+```
+
+默认 trace 路径：
+`<workspace>/.logs/llm_trace_YYYY-MM-DD.jsonl`
+
+> [!WARNING]
+> Trace 文件会包含完整 prompt 和模型输出，请按敏感数据处理。
+
+</details>
 
 <details>
 <summary><b>定时任务（Cron）</b></summary>
