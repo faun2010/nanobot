@@ -872,10 +872,15 @@ The agent can also manage this file itself — ask it to "add a periodic task" a
 ### Docker Compose
 
 ```bash
+export NB_UID="$(id -u)" NB_GID="$(id -g)"
+mkdir -p ~/.nanobot-docker
 docker compose run --rm nanobot-cli onboard   # first-time setup
-vim ~/.nanobot/config.json                     # add API keys
+vim ~/.nanobot-docker/config.json              # add API keys
 docker compose up -d nanobot-gateway           # start gateway
 ```
+
+> With the default `docker-compose.yml`, the current repository is mounted to:
+> `/home/nanobot/.nanobot/workspace/nanobot-src` inside the container.
 
 ```bash
 docker compose run --rm nanobot-cli agent -m "Hello!"   # run CLI

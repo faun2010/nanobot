@@ -26,9 +26,31 @@ class _LLMExchangeLogger:
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
-        self.logs_dir = ensure_dir(workspace / "logs")
-        self.attachments_root = ensure_dir(self.logs_dir / "attachments")
+        self.logs_dir = self._resolve_logs_dir(workspace)
+        self.attachments_root = self._resolve_attachments_dir(self.logs_dir)
         self._write_lock = threading.Lock()
+
+    @staticmethod
+    def _resolve_logs_dir(workspace: Path) -> Path:
+        candidates = [
+            workspace / "logs",
+            Path.home() / ".nanobot" / "logs",
+            Path("/tmp/nanobot-logs"),
+        ]
+        for path in candidates:
+            try:
+                return ensure_dir(path)
+            except Exception:
+                continue
+        # Final fallback: disable attachment writes but keep object usable.
+        return Path("/tmp")
+
+    @staticmethod
+    def _resolve_attachments_dir(logs_dir: Path) -> Path:
+        try:
+            return ensure_dir(logs_dir / "attachments")
+        except Exception:
+            return logs_dir
 
     def new_call_id(self) -> str:
         now = datetime.now()

@@ -2,26 +2,47 @@ x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
+    args:
+      NB_UID: ${NB_UID:-1000}
+      NB_GID: ${NB_GID:-1000}
+      BUILD_WHATSAPP_BRIDGE: ${BUILD_WHATSAPP_BRIDGE:-0}
+  user: "${NB_UID:-1000}:${NB_GID:-1000}"
+  environment:
+    LITELLM_LOCAL_MODEL_COST_MAP: ${LITELLM_LOCAL_MODEL_COST_MAP:-True}
+    # Avoid inheriting host HTTP(S)_PROXY by default.
+    # To enable proxy explicitly, set NANOBOT_HTTP_PROXY/NANOBOT_HTTPS_PROXY.
+    HTTP_PROXY: ${NANOBOT_HTTP_PROXY:-}
+    HTTPS_PROXY: ${NANOBOT_HTTPS_PROXY:-}
+    NO_PROXY: ${NANOBOT_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal}
+    http_proxy: ${NANOBOT_HTTP_PROXY:-}
+    https_proxy: ${NANOBOT_HTTPS_PROXY:-}
+    no_proxy: ${NANOBOT_NO_PROXY:-localhost,127.0.0.1,::1,host.docker.internal}
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
   volumes:
-    - ~/.nanobot:/root/.nanobot
+    - /etc/localtime:/etc/localtime:ro
+    # Runtime profile (config/workspace/memory)
+    - ${HOME}/.mysecondbrain/nbot_fh1001:/home/nanobot/.nanobot
+    # Expose current repository source code to the agent inside workspace
+    - ${HOME}/llm/mySecondBrain/nanobot.github:/home/nanobot/.nanobot/workspace/nanobot-src
 
 services:
-  nanobot-gateway:
-    container_name: nanobot-gateway
+  nbot-fh1001:
+    container_name: nbot-fh1001
     <<: *common-config
     command: ["gateway"]
     restart: unless-stopped
     ports:
-      - 18790:18790
+      - 1001:18790
     deploy:
       resources:
         limits:
-          cpus: '1'
-          memory: 1G
+          cpus: '4'
+          memory: 4G
         reservations:
           cpus: '0.25'
           memory: 256M
-  
+
   nanobot-cli:
     <<: *common-config
     profiles:

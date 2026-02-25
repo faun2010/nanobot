@@ -484,10 +484,14 @@ nanobot cron remove <job_id>
 
 > [!TIP]
 > 建议使用独立目录 `~/.nanobot-docker` 作为 Docker 运行配置，和本地 CLI 调试目录 `~/.nanobot` 完全隔离。
+> 默认 `docker-compose.yml` 会把当前仓库挂载到容器内：
+> `/home/nanobot/.nanobot/workspace/nanobot-src`，便于让 nanobot 直接读取/修改源码。
 
 在容器中构建并运行 nanobot：
 
 ```bash
+export NB_UID="$(id -u)" NB_GID="$(id -g)"
+mkdir -p ~/.nanobot-docker
 # 构建镜像
 docker build -t nanobot .
 
