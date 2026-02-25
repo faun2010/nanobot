@@ -458,15 +458,15 @@ class ProvidersConfig(BaseModel):
 | `nanobot onboard` | 初始化配置与工作区 |
 | `nanobot agent -m "..."` | 与 Agent 对话 |
 | `nanobot agent` | 交互式聊天模式 |
-| `nanobot gateway` | 启动网关（默认开启 LLM trace） |
-| `nanobot gateway --no-llm-trace` | 关闭 LLM trace 日志 |
-| `nanobot gateway --llm-trace-file ~/.nanobot/logs/custom.jsonl` | 写入自定义 trace 文件 |
+| `nanobot gateway` | 启动网关（默认开启 LiteLLM trace） |
+| `nanobot gateway --no-llm-trace` | 关闭 LiteLLM trace 日志 |
+| `nanobot gateway --llm-trace-file ~/.nanobot/logs/custom.jsonl` | 写入自定义 LiteLLM trace 文件 |
 | `nanobot status` | 查看状态 |
 | `nanobot channels login` | 关联 WhatsApp（扫码） |
 | `nanobot channels status` | 查看渠道状态 |
 
 <details>
-<summary><b>LLM API Trace（Gateway）</b></summary>
+<summary><b>LiteLLM Trace（Gateway）</b></summary>
 
 ```bash
 # 默认已开启：按天写入 workspace/.logs/
@@ -508,10 +508,14 @@ nanobot cron remove <job_id>
 
 > [!TIP]
 > 建议使用独立目录 `~/.nanobot-docker` 作为 Docker 运行配置，和本地 CLI 调试目录 `~/.nanobot` 完全隔离。
+> 默认 `docker-compose.yml` 会把当前仓库挂载到容器内：
+> `/home/nanobot/.nanobot/workspace/nanobot-src`，便于让 nanobot 直接读取/修改源码。
 
 在容器中构建并运行 nanobot：
 
 ```bash
+export NB_UID="$(id -u)" NB_GID="$(id -g)"
+mkdir -p ~/.nanobot-docker
 # 构建镜像
 docker build -t nanobot .
 

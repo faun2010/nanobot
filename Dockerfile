@@ -6,7 +6,7 @@ ARG BUILD_WHATSAPP_BRIDGE=0
 
 # Install Node.js 20 for the WhatsApp bridge
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git && \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg git grep && \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
@@ -28,6 +28,14 @@ RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
 COPY nanobot/ nanobot/
 COPY bridge/ bridge/
 RUN uv pip install --system --no-cache .
+RUN python - <<'PY'
+import httpx
+from httpx import AsyncBaseTransport, BaseTransport
+
+print("httpx", httpx.__version__, "transport exports OK")
+print("BaseTransport", BaseTransport)
+print("AsyncBaseTransport", AsyncBaseTransport)
+PY
 
 # Build the WhatsApp bridge
 WORKDIR /app/bridge
